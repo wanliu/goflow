@@ -33,6 +33,24 @@ type graphDescription struct {
 			Buffer int `json:",omitempty"`
 		} `json:",omitempty"`
 	}
+	Inports map[string]struct {
+		Process  string
+		Port     string
+		Metadata struct {
+			X      int
+			Y      int
+			Buffer int `json:",omitempty"`
+		} `json:",omitempty"`
+	}
+	Outports map[string]struct {
+		Process  string
+		Port     string
+		Metadata struct {
+			X      int
+			Y      int
+			Buffer int `json:",omitempty"`
+		} `json:",omitempty"`
+	}
 	Exports []struct {
 		Private string
 		Public  string
@@ -78,6 +96,38 @@ func ParseJSON(js []byte) *Graph {
 			} else {
 				// Add an IIP
 				net.AddIIP(conn.Data, conn.Tgt.Process, conn.Tgt.Port)
+			}
+		}
+
+		// Map inports
+		for name, proc := range descr.Inports {
+			procName := proc.Process
+			port := proc.Port
+			procType := reflect.TypeOf(net.Get(procName)).Elem()
+			field, fieldFound := procType.FieldByName(port)
+			if !fieldFound {
+				panic("Inports Process port '" + proc.Process + "' not found")
+			}
+
+			if field.Type.Kind() == reflect.Chan && (field.Type.ChanDir()&reflect.RecvDir) != 0 {
+				// It's an inport
+				net.MapInPort(name, procName, port)
+			}
+		}
+
+		// Map outports
+		for name, proc := range descr.Outports {
+			procName := proc.Process
+			port := proc.Port
+			procType := reflect.TypeOf(net.Get(procName)).Elem()
+			field, fieldFound := procType.FieldByName(port)
+			if !fieldFound {
+				panic("Outports Process port '" + proc.Process + "' not found")
+			}
+
+			if field.Type.Kind() == reflect.Chan && (field.Type.ChanDir()&reflect.SendDir) != 0 {
+				// It's an inport
+				net.MapOutPort(name, procName, port)
 			}
 		}
 
