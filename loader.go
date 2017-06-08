@@ -41,7 +41,7 @@ type graphDescription struct {
 			Y      int
 			Buffer int `json:",omitempty"`
 		} `json:",omitempty"`
-	}
+	} `json:",omitempty"`
 	Outports map[string]struct {
 		Process  string
 		Port     string
@@ -50,11 +50,11 @@ type graphDescription struct {
 			Y      int
 			Buffer int `json:",omitempty"`
 		} `json:",omitempty"`
-	}
+	} `json:",omitempty"`
 	Exports []struct {
 		Private string
 		Public  string
-	}
+	} `json:",omitempty"`
 }
 
 // ParseJSON converts a JSON network definition string into
