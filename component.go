@@ -23,6 +23,8 @@ var DefaultComponentMode = ComponentModeAsync
 // Component is a generic flow component that has to be contained in concrete components.
 // It stores network-specific information.
 type Component struct {
+	// Component Name in Graph, used in something individual distinguish check.
+	Name string
 	// Is running flag indicates that the process is currently running.
 	IsRunning bool
 	// Net is a pointer to network to inform it when the process is started and over
