@@ -45,9 +45,10 @@ type connection struct {
 // iip stands for Initial Information Packet representation
 // within the network.
 type iip struct {
-	data interface{}
-	proc string // Target process name
-	port string // Target port name
+	data    interface{}
+	proc    string // Target process name
+	port    string // Target port name
+	channel reflect.Value
 }
 
 // portMapper interface is used to obtain subnet's ports.
@@ -263,11 +264,82 @@ func (n *Graph) Rename(processName, newName string) bool {
 
 // AddIIP adds an Initial Information packet to the network
 func (n *Graph) AddIIP(data interface{}, processName, portName string) bool {
-	if _, exists := n.procs[processName]; exists {
-		n.iips = append(n.iips, iip{data: data, proc: processName, port: portName})
-		return true
+
+	receiver, receiverFound := n.procs[processName]
+	if !receiverFound {
+		return false
 	}
-	return false
+
+	// st := sv.Type()
+	rp := reflect.ValueOf(receiver)
+	rv := rp.Elem()
+	// rt := rv.Type()
+	if !rv.CanSet() {
+		return false
+	}
+
+	var rport reflect.Value
+
+	var rnet reflect.Value
+	if rv.Type().Name() == "Graph" {
+		rnet = rv
+	} else {
+		rnet = rv.FieldByName("Graph")
+	}
+	if rnet.IsValid() {
+		if pm, isPm := rnet.Addr().Interface().(portMapper); isPm {
+			rport = pm.getInPort(portName)
+		}
+	} else {
+		// Receiver is a proc
+		rport = rv.FieldByName(portName)
+	}
+
+	// Validate receiver port
+	rtport := rport.Type()
+	if rtport.Kind() != reflect.Chan || rtport.ChanDir()&reflect.RecvDir == 0 {
+		panic(processName + "." + portName + " is not a valid input channel")
+		return false
+	}
+
+	var channel reflect.Value
+	if !rport.IsNil() {
+		for _, mycon := range n.connections {
+			if mycon.tgt.port == processName && mycon.tgt.proc == portName {
+				channel = mycon.channel
+				break
+			}
+		}
+	}
+
+	if rtport.Kind() == reflect.Chan && rtport.ChanDir()&reflect.RecvDir != 0 {
+
+		// Check if channel was already instantiated, if so, use it. Thus we can connect serveral endpoints and golang will pseudo-randomly chooses a receiver
+		// Also, this avoids crashes on <-net.Wait()
+
+		// either sport was nil or we did not find a previous channel instance
+		if !channel.IsValid() {
+			// Make a channel of an appropriate type
+			chanType := reflect.ChanOf(reflect.BothDir, rtport.Elem())
+			channel = reflect.MakeChan(chanType, DefaultBufferSize)
+		}
+	}
+
+	if channel.IsNil() {
+		panic(processName + "." + portName + " is not a valid input channel")
+		return false
+	}
+
+	if !rport.CanSet() {
+		panic(processName + "." + portName + " is not settable")
+	}
+
+	if rport.IsNil() {
+		rport.Set(channel)
+	}
+
+	n.iips = append(n.iips, iip{data: data, proc: processName, port: portName, channel: channel})
+	return true
 }
 
 // RemoveIIP detaches an IIP from specific process and port
@@ -526,6 +598,19 @@ func (n *Graph) listOutPorts() map[string]port {
 	return n.outPorts
 }
 
+func (n *Graph) LookupComponent(com interface{}) (interface{}, bool) {
+	ct := reflect.ValueOf(com)
+	for _, proc := range n.procs {
+		pct := reflect.ValueOf(proc)
+
+		if ct.Type() == pct.Type() {
+			return proc, true
+		}
+	}
+
+	return nil, false
+}
+
 // getWait returns net's wait group.
 func (n *Graph) getWait() *sync.WaitGroup {
 	return n.waitGrp
@@ -683,6 +768,12 @@ func (n *Graph) run() {
 		}
 
 		if !found {
+			if ip.channel.IsValid() && !ip.channel.IsNil() {
+				rport = ip.channel
+				found = true
+			}
+		}
+		if !found {
 			// Try to find a proc and attach a new channel to it
 			for procName, proc := range n.procs {
 				if procName == ip.proc {
@@ -708,20 +799,24 @@ func (n *Graph) run() {
 					if rtport.Kind() != reflect.Chan || rtport.ChanDir()&reflect.RecvDir == 0 {
 						panic(ip.proc + "." + ip.port + " is not a valid input channel")
 					}
-					var channel reflect.Value
 
-					// Make a channel of an appropriate type
-					chanType := reflect.ChanOf(reflect.BothDir, rtport.Elem())
-					channel = reflect.MakeChan(chanType, DefaultBufferSize)
-					// Set the channel
-					if rport.CanSet() {
-						rport.Set(channel)
-					} else {
-						panic(ip.proc + "." + ip.port + " is not settable")
+					if rport.IsNil() {
+						var channel reflect.Value
+
+						// Make a channel of an appropriate type
+						chanType := reflect.ChanOf(reflect.BothDir, rtport.Elem())
+						channel = reflect.MakeChan(chanType, DefaultBufferSize)
+						// Set the channel
+						if rport.CanSet() {
+							rport.Set(channel)
+						} else {
+							panic(ip.proc + "." + ip.port + " is not settable")
+						}
+
+						// Use the new channel to send the IIP
+						rport = channel
 					}
 
-					// Use the new channel to send the IIP
-					rport = channel
 					found = true
 					break
 				}
