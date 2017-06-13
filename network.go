@@ -57,6 +57,7 @@ type portMapper interface {
 	getOutPort(string) reflect.Value
 	hasInPort(string) bool
 	hasOutPort(string) bool
+	hasIPPort(proc, port string) bool
 	listInPorts() map[string]port
 	listOutPorts() map[string]port
 	SetInPort(string, interface{}) bool
@@ -65,14 +66,18 @@ type portMapper interface {
 
 // netController interface is used to run a subnet.
 type netController interface {
-	getWait() *sync.WaitGroup
+	// getWait() *sync.WaitGroup
+	getWait() *waitGroupByName
 	run()
 }
 
 // Graph represents a graph of processes connected with packet channels.
 type Graph struct {
+	// debug for wait groups information
+	Waitbus *WaitBus
 	// Wait is used for graceful network termination.
-	waitGrp *sync.WaitGroup
+	// waitGrp *sync.WaitGroup
+	waitGrp *waitGroupByName
 	// Net is a pointer to parent network.
 	Net *Graph
 	// procs contains the processes of the network.
@@ -99,7 +104,9 @@ type Graph struct {
 
 // InitGraphState method initializes graph fields and allocates memory.
 func (n *Graph) InitGraphState() {
-	n.waitGrp = new(sync.WaitGroup)
+	n.Waitbus = NewWaitBus()
+	// n.waitGrp = new(sync.WaitGroup)
+	n.waitGrp = n.Waitbus.New("net")
 	n.procs = make(map[string]interface{}, DefaultNetworkCapacity)
 	n.inPorts = make(map[string]port, DefaultNetworkPortsNum)
 	n.outPorts = make(map[string]port, DefaultNetworkPortsNum)
@@ -570,6 +577,15 @@ func (n *Graph) Get(processName string) interface{} {
 	}
 }
 
+func (n *Graph) GetComInPort(processName, portName string) *connection {
+	for _, conn := range n.connections {
+		if conn.src.proc == processName && conn.src.port == portName {
+			return &conn
+		}
+	}
+	return nil
+}
+
 // getInPort returns the inport with given name as reflect.Value channel.
 func (n *Graph) getInPort(name string) reflect.Value {
 	pName, ok := n.inPorts[name]
@@ -611,8 +627,13 @@ func (n *Graph) LookupComponent(com interface{}) (interface{}, bool) {
 	return nil, false
 }
 
+func (n *Graph) ListWaits() []*waitGroupByName {
+	return n.Waitbus.List
+}
+
 // getWait returns net's wait group.
-func (n *Graph) getWait() *sync.WaitGroup {
+// func (n *Graph) getWait() *sync.WaitGroup {
+func (n *Graph) getWait() *waitGroupByName {
 	return n.waitGrp
 }
 
@@ -626,6 +647,16 @@ func (n *Graph) hasInPort(name string) bool {
 func (n *Graph) hasOutPort(name string) bool {
 	_, has := n.outPorts[name]
 	return has
+}
+
+func (n *Graph) hasIPPort(proc, port string) bool {
+	for _, iip := range n.iips {
+		if iip.proc == proc && iip.port == port {
+			return true
+		}
+	}
+
+	return false
 }
 
 // MapInPort adds an inport to the net and maps it to a contained proc's port.
@@ -1003,6 +1034,10 @@ func (n *Graph) UnsetOutPort(name string) bool {
 	}
 	delete(n.outPorts, name)
 	return true
+}
+
+func (c *connection) Channel() reflect.Value {
+	return c.channel
 }
 
 // RunNet runs the network by starting all of its processes.

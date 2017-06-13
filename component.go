@@ -95,11 +95,18 @@ func RunProc(c interface{}) bool {
 		initable.Init()
 	}
 
-	// A group to wait for all inputs to be closed
-	inputsClose := new(sync.WaitGroup)
-	// A group to wait for all recv handlers to finish
-	handlersDone := new(sync.WaitGroup)
+	waitbus := getWaitBus(c)
+	if waitbus == nil {
+		waitbus = WaitList
+	}
+	cmpName := v.FieldByName("Name").String()
 
+	// A group to wait for all inputs to be closed
+	// inputsClose := new(sync.WaitGroup)
+	inputsClose := waitbus.New(cmpName + "-inputsClose")
+	// A group to wait for all recv handlers to finish
+	// handlersDone := new(sync.WaitGroup)
+	handlersDone := waitbus.New(cmpName + "-handlersDone")
 	// Get the embedded flow.Component
 	vCom := v.FieldByName("Component")
 	isComponent := vCom.IsValid() && vCom.Type().Name() == "Component"
@@ -129,6 +136,7 @@ func RunProc(c interface{}) bool {
 
 	// Detect active components
 	looper, isLooper := c.(Looper)
+	// pm := getPortMapper(c)
 
 	// Iterate over struct fields and bind handlers
 	inputCount := 0
@@ -142,6 +150,7 @@ func RunProc(c interface{}) bool {
 			cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: fv})
 			h := portHandler{onRecv: vp.MethodByName("On" + ff.Name), onClose: vp.MethodByName("On" + ff.Name + "Close")}
 			handlers = append(handlers, h)
+
 			if h.onClose.IsValid() || h.onRecv.IsValid() {
 				// Add the input to the wait group
 				inputsClose.Add(1)
@@ -198,10 +207,13 @@ func RunProc(c interface{}) bool {
 
 			// Detect and close send-only channels
 			if fv.IsValid() {
+
 				if fv.Kind() == reflect.Chan && (ft.ChanDir()&reflect.SendDir) != 0 && (ft.ChanDir()&reflect.RecvDir) == 0 {
+
 					if vNet.IsValid() && !vNet.IsNil() {
 						if vNet.Interface().(*Graph).DecSendChanRefCount(fv) {
 							if !fv.IsNil() {
+
 								fv.Close()
 							}
 						}
@@ -310,6 +322,8 @@ func RunProc(c interface{}) bool {
 						terminate()
 					} else {
 						// Port has been closed
+						// c := cases[chosen]
+
 						closeHandler(handlers[chosen].onClose)
 					}
 					return
@@ -350,6 +364,83 @@ func RunProc(c interface{}) bool {
 		}
 	}()
 	return true
+}
+
+func getWaitBus(c interface{}) *WaitBus {
+	v := reflect.ValueOf(c)
+	if v.Kind() != reflect.Ptr || v.IsNil() {
+		panic("Argument of flow.Run() is not a valid pointer")
+	}
+	vp := v
+	v = v.Elem()
+	if v.Kind() != reflect.Struct {
+		panic("Argument of flow.Run() is not a valid pointer to structure. Got type: " + vp.Type().Name())
+	}
+	vCom := v.FieldByName("Component")
+	isComponent := vCom.IsValid() && vCom.Type().Name() == "Component"
+
+	if !isComponent {
+		panic("Argument of flow.Run() is not a flow.Component")
+	}
+
+	if vNet := vCom.FieldByName("Net"); vNet.IsValid() && !vNet.IsNil() {
+		if waitbus, ok := vNet.Elem().FieldByName("Waitbus").Interface().(*WaitBus); ok {
+			return waitbus
+		}
+
+	}
+
+	return nil
+}
+
+func getNetController(c interface{}) netController {
+	v := reflect.ValueOf(c)
+	if v.Kind() != reflect.Ptr || v.IsNil() {
+		panic("Argument of flow.Run() is not a valid pointer")
+	}
+	vp := v
+	v = v.Elem()
+	if v.Kind() != reflect.Struct {
+		panic("Argument of flow.Run() is not a valid pointer to structure. Got type: " + vp.Type().Name())
+	}
+	vCom := v.FieldByName("Component")
+	isComponent := vCom.IsValid() && vCom.Type().Name() == "Component"
+
+	if !isComponent {
+		panic("Argument of flow.Run() is not a flow.Component")
+	}
+
+	if vNet := vCom.FieldByName("Net"); vNet.IsValid() && !vNet.IsNil() {
+		if vNetCtr, hasNet := vNet.Interface().(netController); hasNet {
+			return vNetCtr
+		}
+	}
+	return nil
+}
+
+func getPortMapper(c interface{}) portMapper {
+	v := reflect.ValueOf(c)
+	if v.Kind() != reflect.Ptr || v.IsNil() {
+		panic("Argument of flow.Run() is not a valid pointer")
+	}
+	vp := v
+	v = v.Elem()
+	if v.Kind() != reflect.Struct {
+		panic("Argument of flow.Run() is not a valid pointer to structure. Got type: " + vp.Type().Name())
+	}
+	vCom := v.FieldByName("Component")
+	isComponent := vCom.IsValid() && vCom.Type().Name() == "Component"
+
+	if !isComponent {
+		panic("Argument of flow.Run() is not a flow.Component")
+	}
+
+	if vNet := vCom.FieldByName("Net"); vNet.IsValid() && !vNet.IsNil() {
+		if vPortCtr, hasNet := vNet.Interface().(portMapper); hasNet {
+			return vPortCtr
+		}
+	}
+	return nil
 }
 
 // StopProc terminates the process if it is running.
